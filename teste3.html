@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Arcade: Full Audio Fix</title>
+    <link href="https://cdnfonts.com" rel="stylesheet">
+    <style>
+        :root { --hue: 150; --color: hsl(var(--hue), 100%, 50%); }
+        body { background-color: #000; color: white; margin: 0; font-family: '8BIT WONDER', sans-serif; overflow: hidden; touch-action: none; user-select: none; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        #app-container { position: relative; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+        #main-menu { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 20px; transition: transform 1s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.6s; z-index: 50; }
+        #main-menu.exit { transform: translateY(-100vh); opacity: 0; pointer-events: none; }
+        .menu-title { font-size: clamp(20px, 6vw, 38px); color: #fff; text-shadow: 0 0 20px var(--color); margin-bottom: 20px; text-align: center; }
+        .game-card { width: 320px; padding: 25px; border: 4px solid var(--color); background: rgba(255, 255, 255, 0.05); cursor: pointer; text-align: center; font-size: 18px; box-shadow: 0 0 15px var(--color); }
+        #game-wrapper { display: flex; flex-direction: column; align-items: center; opacity: 0; transform: translateY(50px); transition: 1s; pointer-events: none; width: 100%; }
+        #game-wrapper.active { opacity: 1; transform: translateY(0); pointer-events: all; }
+        #ui-top { margin-bottom: 10px; font-size: 28px; color: var(--color); text-shadow: 0 0 10px var(--color); }
+        #game-container { position: relative; border: 5px solid var(--color); box-shadow: 0 0 30px var(--color); background-color: #050505; line-height: 0; }
+        canvas { max-width: 90vw; max-height: 50vh; object-fit: contain; }
+        #speech-bubble { position: absolute; background: white; color: black; padding: 15px; border-radius: 5px; font-size: 12px; bottom: 115%; left: 50%; transform: translateX(-50%); display: none; z-index: 60; border: 4px solid black; width: 260px; text-align: center; }
+        #mobile-controls { display: none; grid-template-areas: ". up ." "left down right"; gap: 5px; margin-top: 20px; }
+        @media (max-width: 768px) { #mobile-controls { display: grid; } }
+        .btn { width: 75px; height: 75px; border: 3px solid var(--color); display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05); color: white; font-size: 28px; box-shadow: 0 0 10px var(--color); }
+        .btn:active { background: var(--color); color: black; }
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 100; text-align: center; }
+        .shake { animation: shakeAnim 0.2s ease-in-out; }
+        @keyframes shakeAnim { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(6px, -6px); } 50% { transform: translate(-6px, 6px); } 75% { transform: translate(6px, 6px); } }
+        .celebrate { animation: flash 0.3s ease-out; }
+        @keyframes flash { 0% { background-color: var(--color); } 100% { background-color: #000; } }
+    </style>
+</head>
+<body id="game-body">
+
+    <div id="app-container">
+        <div id="main-menu">
+            <h1 class="menu-title">NEON ARCADE</h1>
+            <div class="game-card" onclick="enterGame()">NEON SNAKE</div>
+        </div>
+
+        <div id="game-wrapper">
+            <div id="ui-top">SCORE <span id="score">0</span></div>
+            <div id="game-container">
+                <div id="speech-bubble"></div>
+                <canvas id="canvas" width="360" height="360"></canvas>
+                <div id="game-over" class="overlay">
+                    <h2 style="color: #ff3e3e; font-size: 26px; margin-bottom: 20px; text-align: center;">GAME OVER</h2>
+                    <p id="death-quote" style="font-size: 14px; color: #aaa; padding: 0 20px; text-align: center; line-height: 1.6; margin-bottom: 30px;"></p>
+                    <button onclick="resetSnakeGame()" style="font-family: '8BIT WONDER'; padding: 20px; cursor:pointer; background: var(--color); border:none; color:black; font-size: 16px;">REINICIAR</button>
+                </div>
+            </div>
+
+            <div id="mobile-controls">
+                <div class="btn" style="grid-area: up" onpointerdown="handleMove(0,-1)">▲</div>
+                <div class="btn" style="grid-area: left" onpointerdown="handleMove(-1,0)">◀</div>
+                <div class="btn" style="grid-area: down" onpointerdown="handleMove(0,1)">▼</div>
+                <div class="btn" style="grid-area: right" onpointerdown="handleMove(1,0)">▶</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- AUDIO ENGINE DEFINITIVO ---
+        let audioCtx;
+
+        function initAudio() { 
+            if (!audioCtx) { 
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)(); 
+                startPulseMusic(); 
+            } else if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+
+        function playSound(freq, type, duration, vol) {
+            if (!audioCtx) return;
+            audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        }
+
+        function startPulseMusic() {
+            setInterval(() => {
+                if (active || !started) {
+                    playSound(60, 'sine', 1.5, 0.05); // Pulso rítmico suave
+                }
+            }, 2000);
+        }
+
+        // --- GAME LOGIC ---
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const bubble = document.getElementById('speech-bubble');
+        const gameContainer = document.getElementById('game-container');
+        const size = 30; const tiles = canvas.width / size;
+
+        let snake, food, dx, dy, nextDx, nextDy, score, active, started, moveProgress, color, fColor, particles = [], isDying = false;
+        const moveSpeed = 0.10; 
+        const phrases = ["SABOR DIGITAL!", "MAIS ENERGIA!", "DELICIA NEON!", "PERFEITO!"];
+        const deathPhrases = ["A LUZ SE APAGOU", "ERRO DE SISTEMA", "SINAL PERDIDO", "FALHA CRITICA"];
+
+        function updateColors() {
+            const h = Math.floor(Math.random() * 360);
+            document.documentElement.style.setProperty('--hue', h);
+            color = `hsl(${h}, 100%, 50%)`;
+            fColor = `hsl(${(h + 140) % 360}, 100%, 60%)`;
+        }
+
+        function createParticles(x, y, c, count=12) {
+            for(let i=0; i<count; i++) particles.push({ x:x*size+15, y:y*size+15, vx:(Math.random()-0.5)*8, vy:(Math.random()-0.5)*8, life:1.0, size:Math.random()*5+2, color:c });
+        }
+
+        function showPhrase() {
+            bubble.innerText = phrases[Math.floor(Math.random()*phrases.length)];
+            bubble.style.display = 'block';
+            setTimeout(() => bubble.style.display = 'none', 1200);
+        }
+
+        function initVars() {
+            updateColors();
+            snake = [{x:6, y:6}, {x:5, y:6}];
+            food = {x:9, y:6};
+            dx=0; dy=0; nextDx=0; nextDy=0; score=0; active=true; started=false; isDying=false; moveProgress=0; particles=[];
+            document.getElementById('score').innerText = score;
+            document.getElementById('game-over').style.display = 'none';
+        }
+
+        function enterGame() {
+            initAudio();
+            document.getElementById('main-menu').classList.add('exit');
+            setTimeout(() => { 
+                document.getElementById('game-wrapper').classList.add('active'); 
+                initVars(); 
+                requestAnimationFrame(gameLoop); 
+            }, 600);
+        }
+
+        function resetSnakeGame() { 
+            if(audioCtx) audioCtx.resume();
+            if(!isDying) initVars(); 
+        }
+
+        function handleMove(x, y) {
+            if(!active || isDying) return;
+            if(started && x===-dx && y===-dy) return;
+            if(nextDx!==x || nextDy!==y) playSound(1000, 'square', 0.05, 0.06); // Tick
+            nextDx=x; nextDy=y; started=true;
+        }
+
+        window.addEventListener('keydown', e => {
+            const k = e.key.toLowerCase();
+            if(['arrowup','w'].includes(k)) handleMove(0,-1);
+            if(['arrowdown','s'].includes(k)) handleMove(0,1);
+            if(['arrowleft','a'].includes(k)) handleMove(-1,0);
+            if(['arrowright','d'].includes(k)) handleMove(1,0);
+            if(e.key===' ' && !active && !isDying) { e.preventDefault(); resetSnakeGame(); }
+        });
+
+        function update() {
+            particles.forEach((p,i) => { p.x+=p.vx; p.y+=p.vy; p.life-=0.02; if(p.life<=0) particles.splice(i,1); });
+            if(!active || !started || isDying) return;
+            moveProgress += moveSpeed;
+            if(moveProgress >= 1) {
+                moveProgress=0; dx=nextDx; dy=nextDy;
+                const head = { x: snake[0].x + dx, y: snake[0].y + dy }; 
+                if(head.x<0 || head.x>=tiles || head.y<0 || head.y>=tiles || snake.some((p,i)=>i!==0 && p.x===head.x && p.y===head.y)) return startDeath();
+                snake.unshift(head);
+                if(head.x===food.x && head.y===food.y) {
+                    score+=10; document.getElementById('score').innerText=score;
+                    createParticles(food.x, food.y, fColor); 
+                    playSound(800, 'sine', 0.1, 0.2); // Beep Comida
+                    gameContainer.classList.remove('shake'); void gameContainer.offsetWidth; gameContainer.classList.add('shake');
+                    document.getElementById('game-body').classList.remove('celebrate'); void document.getElementById('game-body').offsetWidth; document.getElementById('game-body').classList.add('celebrate');
+                    showPhrase(); spawnFood();
+                } else snake.pop();
+            }
+        }
+
+        function startDeath() {
+            isDying = true; active = false; 
+            playSound(120, 'triangle', 0.8, 0.4); // Som de Morte
+            let snap = [...snake];
+            snap.forEach((p,i) => setTimeout(()=>createParticles(p.x, p.y, color, 15), i*40));
+            setTimeout(() => {
+                document.getElementById('death-quote').innerText = deathPhrases[Math.floor(Math.random()*deathPhrases.length)];
+                document.getElementById('game-over').style.display='flex';
+                isDying=false;
+            }, (snap.length*40)+800);
+        }
+
+        function spawnFood() {
+            let n; while(true) { n={x:Math.floor(Math.random()*tiles), y:Math.floor(Math.random()*tiles)}; if(!snake.some(p=>p.x===n.x && p.y===n.y)) break; }
+            food=n;
+        }
+
+        function draw() {
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            particles.forEach(p => { ctx.globalAlpha=p.life; ctx.shadowBlur=10; ctx.shadowColor=p.color; ctx.fillStyle=p.color; ctx.fillRect(p.x,p.y,p.size,p.size); });
+            ctx.globalAlpha=1.0;
+            if(!isDying && active) {
+                ctx.shadowBlur=15; ctx.shadowColor=fColor; ctx.fillStyle=fColor;
+                ctx.beginPath(); ctx.arc(food.x*size+15, food.y*size+15, 8, 0, Math.PI*2); ctx.fill();
+                const drawP = (w,c,b) => {
+                    ctx.lineWidth=w; ctx.strokeStyle=c; ctx.shadowBlur=b; ctx.shadowColor=c; ctx.lineCap='round'; ctx.lineJoin='round'; ctx.beginPath();
+                    for(let i=0; i<snake.length; i++) {
+                        let x=snake[i].x*size+15, y=snake[i].y*size+15;
+                        if(i===0 && started) { x-=dx*(1-moveProgress)*size; y-=dy*(1-moveProgress)*size; }
+                        if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+                    }
+                    ctx.stroke();
+                };
+                if(snake.length>0) { drawP(size-10, color, 20); drawP(6, "#fff", 5); }
+            }
+        }
+        function gameLoop() { update(); draw(); requestAnimationFrame(gameLoop); }
+    </script>
+</body>
+</html>
